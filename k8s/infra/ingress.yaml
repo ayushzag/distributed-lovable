@@ -7,23 +7,19 @@ metadata:
     nginx.ingress.kubernetes.io/proxy-read-timeout: "3600"
     nginx.ingress.kubernetes.io/proxy-send-timeout: "3600"
 spec:
-  ingressClassName: "nginx"
+  ingressClassName: nginx
   rules:
-  # 1. Main Website Route (The Frontend!)
+  # Main Website: /api reaches the API Gateway; all other paths reach the frontend.
   - host: "codingshuttle.in"
     http:
       paths:
-      - path: /
+      - path: /api
         pathType: Prefix
         backend:
           service:
-            name: lovable-frontend
+            name: api-gateway
             port:
               number: 80
-              
-  - host: "www.codingshuttle.in"
-    http:
-      paths:
       - path: /
         pathType: Prefix
         backend:
@@ -32,7 +28,25 @@ spec:
             port:
               number: 80
 
-  # 2. Previews Route
+  - host: "www.codingshuttle.in"
+    http:
+      paths:
+      - path: /api
+        pathType: Prefix
+        backend:
+          service:
+            name: api-gateway
+            port:
+              number: 80
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: lovable-frontend
+            port:
+              number: 80
+
+  # Dynamic preview URLs; replace with a subdomain of your own domain before deployment.
   - host: "*.previews.codingshuttle.in"
     http:
       paths:
@@ -43,8 +57,8 @@ spec:
             name: lovable-me-proxy
             port:
               number: 80
-  
-  # 3. API Gateway Route
+
+  # Optional dedicated API hostname, if desired later.
   - host: "api.codingshuttle.in"
     http:
       paths:

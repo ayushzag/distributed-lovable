@@ -1,5 +1,4 @@
 # k8s/services/api-gateway.yaml
-
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -32,6 +31,11 @@ spec:
               value: "10"
             - name: SPRING_CLOUD_CONFIG_RETRY_INITIAL_INTERVAL
               value: "3000"
+            - name: CORS_ALLOWED_ORIGINS
+              valueFrom:
+                configMapKeyRef:
+                  name: lovable-shared-config
+                  key: CORS_ALLOWED_ORIGINS
             - name: JWT_SECRET
               valueFrom:
                 secretKeyRef:
@@ -59,7 +63,6 @@ metadata:
   name: api-gateway
   namespace: lovable-core
 spec:
-  # type: LoadBalancer
   selector:
     app: api-gateway
   ports:

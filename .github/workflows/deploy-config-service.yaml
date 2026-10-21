@@ -1,25 +1,21 @@
 name: Deploy Config Service
 
+# Manual until Docker Hub and GKE secrets are configured. Push-based CI/CD is enabled in Part 5.
 on:
-  push:
-    branches:
-      - main
-    paths:
-      - 'config-service/**'
-
-env:
-  SERVICE_NAME: config-service
-  IMAGE_NAME: ayushzag/lovable-config-service
+  workflow_dispatch:
 
 permissions:
   id-token: write
   contents: read
 
+env:
+  SERVICE_NAME: config-service
+  IMAGE_NAME: ayushzag/lovable-config-service
+
 jobs:
   build-and-deploy:
-    name: Build, Push, and Deploy to GKE
+    name: Build, push, and deploy to GKE
     runs-on: ubuntu-latest
-
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -28,17 +24,20 @@ jobs:
         uses: actions/setup-java@v4
         with:
           java-version: '21'
-          distribution: 'temurin'
+          distribution: temurin
           cache: maven
 
-      - name: Build and Push Docker Image with Jib
-        working-directory: ./${{ env.SERVICE_NAME }}
+      - name: Build and push Docker image with Jib
+        working-directory: ./config-service
+        env:
+          DOCKERHUB_USERNAME: ${{ secrets.DOCKERHUB_USERNAME }}
+          DOCKERHUB_TOKEN: ${{ secrets.DOCKERHUB_TOKEN }}
         run: |
           ./mvnw compile jib:build \
-            -Djib.to.image=docker.io/${{ env.IMAGE_NAME }}:${{ github.sha }} \
+            -Djib.to.image=docker.io/ayushzag/lovable-config-service:${{ github.sha }} \
             -Djib.to.tags=latest \
-            -Djib.to.auth.username=${{ secrets.DOCKERHUB_USERNAME }} \
-            -Djib.to.auth.password=${{ secrets.DOCKERHUB_TOKEN }}
+            -Djib.to.auth.username="$DOCKERHUB_USERNAME" \
+            -Djib.to.auth.password="$DOCKERHUB_TOKEN"
 
       - name: Authenticate to Google Cloud
         uses: google-github-actions/auth@v2
@@ -46,16 +45,14 @@ jobs:
           workload_identity_provider: '${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}'
           service_account: '${{ secrets.GCP_SERVICE_ACCOUNT }}'
 
-      - name: Get GKE Credentials
+      - name: Get GKE credentials
         uses: google-github-actions/get-gke-credentials@v2
         with:
           cluster_name: ${{ secrets.GCP_CLUSTER }}
           location: ${{ secrets.GCP_ZONE }}
+          project_id: ${{ secrets.GCP_PROJECT }}
 
       - name: Deploy to GKE
         run: |
-          kubectl set image deployment/${{ env.SERVICE_NAME }} \
-          ${{ env.SERVICE_NAME }}=${{ env.IMAGE_NAME }}:${{ github.sha }} \
-          -n lovable-core
-          
-          kubectl rollout status deployment/${{ env.SERVICE_NAME }} -n lovable-core
+          kubectl set image deployment/config-service config-service=docker.io/ayushzag/lovable-config-service:${{ github.sha }} -n lovable-core
+          kubectl rollout status deployment/config-service -n lovable-core
