@@ -23,29 +23,60 @@ public class JwtAuthFilter extends OncePerRequestFilter {
     private final HandlerExceptionResolver handlerExceptionResolver;
 
     @Override
-    protected void doFilterInternal(HttpServletRequest request, HttpServletResponse response, FilterChain filterChain) throws ServletException, IOException {
-        try {
-            log.info("incoming request: {}", request.getRequestURI());
+    protected void doFilterInternal(
+            HttpServletRequest request,
+            HttpServletResponse response,
+            FilterChain filterChain
+    ) throws ServletException, IOException {
 
-            final String requestHeaderToken = request.getHeader("Authorization");
-            if (requestHeaderToken == null || !requestHeaderToken.startsWith("Bearer ")) {
-                filterChain.doFilter(request, response);
-                return;
-            }
+        log.info("incoming request: {}", request.getRequestURI());
 
-            String jwtToken = requestHeaderToken.split("Bearer ")[1];
+        final String requestHeaderToken =
+                request.getHeader("Authorization");
 
-            JwtUserPrincipal user = authUtil.verifyAccessToken(jwtToken);
-            if (user != null && SecurityContextHolder.getContext().getAuthentication() == null) {
-                UsernamePasswordAuthenticationToken authenticationToken = new UsernamePasswordAuthenticationToken(
-                        user, jwtToken, user.authorities()
-                );
-                SecurityContextHolder.getContext().setAuthentication(authenticationToken);
-            }
-
+        if (requestHeaderToken == null
+                || !requestHeaderToken.startsWith("Bearer ")) {
             filterChain.doFilter(request, response);
-        } catch (Exception e) {
-            handlerExceptionResolver.resolveException(request, response, null, e);
+            return;
         }
+
+        try {
+            String jwtToken = requestHeaderToken.substring(7);
+
+            JwtUserPrincipal user =
+                    authUtil.verifyAccessToken(jwtToken);
+
+            if (user != null
+                    && SecurityContextHolder.getContext()
+                            .getAuthentication() == null) {
+
+                UsernamePasswordAuthenticationToken authenticationToken =
+                        new UsernamePasswordAuthenticationToken(
+                                user,
+                                jwtToken,
+                                user.authorities()
+                        );
+
+                SecurityContextHolder.getContext()
+                        .setAuthentication(authenticationToken);
+            }
+
+        } catch (Exception e) {
+            var resolved = handlerExceptionResolver.resolveException(
+                    request, response, null, e
+            );
+
+            if (resolved == null && !response.isCommitted()) {
+                response.sendError(
+                        HttpServletResponse.SC_UNAUTHORIZED,
+                        "Invalid or expired JWT token"
+                );
+            }
+
+            return;
+        }
+
+        // Keep application processing outside the JWT exception handler.
+        filterChain.doFilter(request, response);
     }
 }
