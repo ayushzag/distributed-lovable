@@ -14,7 +14,7 @@ env:
 
 jobs:
   build-and-deploy:
-    name: Build, push, and deploy to GKE
+    name: Build/push image; GKE deploy is opt-in
     runs-on: ubuntu-latest
     steps:
       - name: Checkout Code
@@ -44,12 +44,14 @@ jobs:
             -Djib.to.auth.password="$DOCKERHUB_TOKEN"
 
       - name: Authenticate to Google Cloud
+        if: ${{ vars.DEPLOY_TO_GKE == 'true' }}
         uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: '${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}'
           service_account: '${{ secrets.GCP_SERVICE_ACCOUNT }}'
 
       - name: Get GKE credentials
+        if: ${{ vars.DEPLOY_TO_GKE == 'true' }}
         uses: google-github-actions/get-gke-credentials@v2
         with:
           cluster_name: ${{ secrets.GCP_CLUSTER }}
@@ -57,6 +59,7 @@ jobs:
           project_id: ${{ secrets.GCP_PROJECT }}
 
       - name: Deploy to GKE
+        if: ${{ vars.DEPLOY_TO_GKE == 'true' }}
         run: |
           kubectl set image deployment/workspace-service workspace-service=docker.io/ayushzag/lovable-workspace-service:${{ github.sha }} -n lovable-core
           kubectl rollout status deployment/workspace-service -n lovable-core
