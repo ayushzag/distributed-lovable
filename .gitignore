@@ -1,0 +1,27 @@
+# Secrets and environment files
+.env
+.env.*
+!.env.example
+**/.env
+**/.env.*
+!**/.env.example
+
+# Build artifacts
+**/target/
+**/node_modules/
+**/dist/
+**/build/
+*.class
+*.iml
+
+# IDE and operating system files
+.idea/
+.vscode/
+.DS_Store
+
+# Temporary files and logs
+*.log
+*.tmp
+*.bak
+*.swp
+*.swo
