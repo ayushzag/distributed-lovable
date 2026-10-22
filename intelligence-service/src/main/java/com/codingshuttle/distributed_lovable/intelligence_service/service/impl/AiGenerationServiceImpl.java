@@ -3,7 +3,6 @@ package com.codingshuttle.distributed_lovable.intelligence_service.service.impl;
 import com.codingshuttle.distributed_lovable.common_lib.enums.ChatEventStatus;
 import com.codingshuttle.distributed_lovable.common_lib.enums.ChatEventType;
 import com.codingshuttle.distributed_lovable.common_lib.enums.MessageRole;
-import com.codingshuttle.distributed_lovable.common_lib.error.ResourceNotFoundException;
 import com.codingshuttle.distributed_lovable.common_lib.event.FileStoreRequestEvent;
 import com.codingshuttle.distributed_lovable.common_lib.security.AuthUtil;
 import com.codingshuttle.distributed_lovable.intelligence_service.client.WorkspaceClient;
@@ -35,7 +34,6 @@ import java.util.List;
 import java.util.Map;
 import java.util.UUID;
 import java.util.concurrent.atomic.AtomicReference;
-import java.util.regex.Pattern;
 
 @Service
 @RequiredArgsConstructor
@@ -53,12 +51,9 @@ public class AiGenerationServiceImpl implements AiGenerationService {
     private final WorkspaceClient workspaceClient;
     private final KafkaTemplate<String, Object> kafkaTemplate;
 
-
     @Override
     @PreAuthorize("@security.canEditProject(#projectId)")
     public Flux<StreamResponse> streamResponse(String userMessage, Long projectId) {
-
-//        usageService.checkDailyTokensUsage();
 
         Long userId = authUtil.getCurrentUserId();
         ChatSession chatSession = createChatSessionIfNotExists(projectId, userId);
@@ -69,9 +64,11 @@ public class AiGenerationServiceImpl implements AiGenerationService {
         );
 
         StringBuilder fullResponseBuffer = new StringBuilder();
-        CodeGenerationTools codeGenerationTools = new CodeGenerationTools(projectId, workspaceClient);
+        CodeGenerationTools codeGenerationTools =
+                new CodeGenerationTools(projectId, workspaceClient);
 
-        AtomicReference<Long> startTime = new AtomicReference<>(System.currentTimeMillis());
+        AtomicReference<Long> startTime =
+                new AtomicReference<>(System.currentTimeMillis());
         AtomicReference<Long> endTime = new AtomicReference<>(0L);
         AtomicReference<Usage> usageRef = new AtomicReference<>();
 
@@ -80,110 +77,208 @@ public class AiGenerationServiceImpl implements AiGenerationService {
                 .user(userMessage)
                 .tools(codeGenerationTools)
                 .advisors(advisorSpec -> {
-                            advisorSpec.params(advisorParams);
-                            advisorSpec.advisors(fileTreeContextAdvisor);
-                        }
-                )
+                    advisorSpec.params(advisorParams);
+                    advisorSpec.advisors(fileTreeContextAdvisor);
+                })
                 .stream()
                 .chatResponse()
                 .doOnNext(response -> {
-                    if (response.getResults() != null && !response.getResults().isEmpty()) {
-                        String content = response.getResult().getOutput().getText();
+                    if (response.getResults() != null
+                            && !response.getResults().isEmpty()) {
 
-                        if(content != null && !content.isEmpty() && endTime.get() == 0) { // first non-empty chunk received
-                            endTime.set(System.currentTimeMillis());
+                        String content = response.getResult()
+                                .getOutput()
+                                .getText();
+
+                        if (content != null && !content.isEmpty()) {
+                            if (endTime.get() == 0) {
+                                endTime.set(System.currentTimeMillis());
+                            }
+
+                            fullResponseBuffer.append(content);
                         }
-                        if(response.getMetadata().getUsage() != null) {
+
+                        if (response.getMetadata().getUsage() != null) {
                             usageRef.set(response.getMetadata().getUsage());
                         }
-                        fullResponseBuffer.append(content);
                     }
-
                 })
-                .doOnComplete(() -> {
-                    Schedulers.boundedElastic().schedule(() -> {
-//                        parseAndSaveFiles(fullResponseBuffer.toString(), projectId);
+                .doOnComplete(() ->
+                        Schedulers.boundedElastic().schedule(() -> {
+                            try {
+                                long completedAt = endTime.get() > 0
+                                        ? endTime.get()
+                                        : System.currentTimeMillis();
 
-                        long duration = (endTime.get() - startTime.get()) /  1000;
-                        finalizeChats(userMessage, chatSession, fullResponseBuffer.toString(), duration, usageRef.get(), userId);
-                    });
-                })
-                .doOnError(error -> log.error("Error during streaming for projectId: {}", projectId))
+                                long duration =
+                                        (completedAt - startTime.get()) / 1000;
+
+                                String fullText = fullResponseBuffer.toString();
+
+                                log.info(
+                                        "Finalizing AI response for projectId={}, responseLength={}",
+                                        projectId,
+                                        fullText.length()
+                                );
+
+                                finalizeChats(
+                                        userMessage,
+                                        chatSession,
+                                        fullText,
+                                        duration,
+                                        usageRef.get(),
+                                        userId
+                                );
+
+                            } catch (Exception ex) {
+                                log.error(
+                                        "Failed to finalize chat for projectId: {}",
+                                        projectId,
+                                        ex
+                                );
+                            }
+                        })
+                )
+                .doOnError(error ->
+                        log.error(
+                                "Error during streaming for projectId: {}",
+                                projectId,
+                                error
+                        )
+                )
                 .map(response -> {
-                    if (response.getResults() != null && !response.getResults().isEmpty()) {
-                        String text = response.getResult().getOutput().getText();
+                    if (response.getResults() != null
+                            && !response.getResults().isEmpty()) {
+
+                        String text = response.getResult()
+                                .getOutput()
+                                .getText();
+
                         return new StreamResponse(text != null ? text : "");
                     }
+
                     return new StreamResponse("");
                 });
     }
 
-    private void finalizeChats(String userMessage, ChatSession chatSession, String fullText, Long duration, Usage usage, Long userId) {
+    private void finalizeChats(
+            String userMessage,
+            ChatSession chatSession,
+            String fullText,
+            Long duration,
+            Usage usage,
+            Long userId
+    ) {
+
         Long projectId = chatSession.getId().getProjectId();
 
-        if(usage != null) {
-            int totalTokens = usage.getTotalTokens();
-            usageService.recordTokenUsage(chatSession.getId().getUserId(), totalTokens);
+        if (usage != null) {
+            Integer totalTokens = usage.getTotalTokens();
+
+            if (totalTokens != null && totalTokens > 0) {
+                usageService.recordTokenUsage(
+                        chatSession.getId().getUserId(),
+                        totalTokens
+                );
+            }
         }
 
-        // Save the User message
-        chatMessageRepository.save(
-                ChatMessage.builder()
-                        .chatSession(chatSession)
-                        .role(MessageRole.USER)
-                        .content(userMessage)
-                        .tokensUsed(usage.getPromptTokens())
-                        .build()
-        );
+        int promptTokens = usage != null
+                ? safeTokenCount(usage.getPromptTokens())
+                : 0;
+
+        int completionTokens = usage != null
+                ? safeTokenCount(usage.getCompletionTokens())
+                : 0;
+
+        ChatMessage userChatMessage = ChatMessage.builder()
+                .chatSession(chatSession)
+                .role(MessageRole.USER)
+                .content(userMessage)
+                .tokensUsed(promptTokens)
+                .build();
+
+        chatMessageRepository.save(userChatMessage);
 
         ChatMessage assistantChatMessage = ChatMessage.builder()
                 .role(MessageRole.ASSISTANT)
                 .content("Assistant Message here...")
                 .chatSession(chatSession)
-                .tokensUsed(usage.getCompletionTokens())
+                .tokensUsed(completionTokens)
                 .build();
 
         assistantChatMessage = chatMessageRepository.save(assistantChatMessage);
 
-        List<ChatEvent> chatEventList = llmResponseParser.parseChatEvents(fullText, assistantChatMessage);
-        chatEventList.addFirst(ChatEvent.builder()
+        List<ChatEvent> chatEventList =
+                llmResponseParser.parseChatEvents(fullText, assistantChatMessage);
+
+        chatEventList.addFirst(
+                ChatEvent.builder()
                         .type(ChatEventType.THOUGHT)
                         .status(ChatEventStatus.CONFIRMED)
                         .chatMessage(assistantChatMessage)
-                        .content("Thought for "+duration+"s")
+                        .content("Thought for " + duration + "s")
                         .sequenceOrder(0)
-                .build());
+                        .build()
+        );
 
         chatEventList.stream()
-                .filter(e -> e.getType() == ChatEventType.FILE_EDIT)
-                .forEach(e -> {
+                .filter(event -> event.getType() == ChatEventType.FILE_EDIT)
+                .forEach(event -> {
                     String sagaId = UUID.randomUUID().toString();
-                    e.setSagaId(sagaId);
-                    FileStoreRequestEvent fileStoreRequestEvent = new FileStoreRequestEvent(
-                            projectId,
-                            sagaId,
-                            e.getFilePath(),
-                            e.getContent(),
-                            userId
+                    event.setSagaId(sagaId);
+
+                    FileStoreRequestEvent fileStoreRequestEvent =
+                            new FileStoreRequestEvent(
+                                    projectId,
+                                    sagaId,
+                                    event.getFilePath(),
+                                    event.getContent(),
+                                    userId
+                            );
+
+                    log.info(
+                            "Storage request event sent: {}",
+                            event.getFilePath()
                     );
-                    log.info("Storage request event sent: {}", e.getFilePath());
-                    kafkaTemplate.send("file-storage-request-event", "project-"+projectId, fileStoreRequestEvent);
+
+                    kafkaTemplate.send(
+                            "file-storage-request-event",
+                            "project-" + projectId,
+                            fileStoreRequestEvent
+                    );
                 });
 
         chatEventRepository.saveAll(chatEventList);
+
+        log.info(
+                "Saved {} chat events for projectId={}",
+                chatEventList.size(),
+                projectId
+        );
     }
 
-    private ChatSession createChatSessionIfNotExists(Long projectId, Long userId) {
-        ChatSessionId chatSessionId = new ChatSessionId(projectId, userId);
-        ChatSession chatSession = chatSessionRepository.findById(chatSessionId).orElse(null);
+    private int safeTokenCount(Integer tokens) {
+        return tokens != null ? tokens : 0;
+    }
 
-        if(chatSession == null) {
+    private ChatSession createChatSessionIfNotExists(
+            Long projectId,
+            Long userId
+    ) {
+        ChatSessionId chatSessionId = new ChatSessionId(projectId, userId);
+
+        ChatSession chatSession =
+                chatSessionRepository.findById(chatSessionId).orElse(null);
+
+        if (chatSession == null) {
             chatSession = ChatSession.builder()
                     .id(chatSessionId)
                     .build();
 
             chatSession = chatSessionRepository.save(chatSession);
         }
+
         return chatSession;
     }
 }
